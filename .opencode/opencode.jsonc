@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Project-local instruction set. AGENTS.md is auto-loaded by OpenCode;
+  // these files provide the detailed context and working rules.
+  "instructions": [".agent/*.md"]
+}

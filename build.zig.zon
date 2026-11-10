@@ -1,0 +1,18 @@
+.{
+    .name = .camera_project,
+    .version = "0.1.0",
+    .fingerprint = 0xe261a9ca0e20e36d,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .nanoui = .{
+            .url = "git+https://github.com/justrach/nanoui?ref=v0.13.0#d17a467d55db4ff3cf765f6f0e208e6234abf4a1",
+            .hash = "nanoui-0.13.0-we0KMd1-MQBzJq1VU59oWYKF3KHhSYPj8_qjVe2icq_e",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}
