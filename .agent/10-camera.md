@@ -454,6 +454,38 @@ a `Camera on` stream toggle and a `Restart camera` button:
 - `camera-settings.exe` is now built with `gui.subsystem = .windows`; the PE
   header reports subsystem 2, so launching it opens no console window.
 
+### 2026-11-10 — logon daemon without a console window
+
+After a reboot the logon task showed the daemon console in the foreground
+(`C:\Users\kp\camera_project-out\bin\camera-probe.exe`). The task had always
+started the console-subsystem binary; earlier it only happened to sit behind
+other windows.
+
+Fix: added `src/daemon_main.zig` and a new `camera-daemon.exe` built with
+`daemon_exe.subsystem = .windows`. It runs the same `daemon.zig` controller but
+never creates a console. Before `daemon.run`, it opens
+`%LOCALAPPDATA%\CameraProject\daemon.log` (truncated at every start) and points
+the process's stderr at it (`ProcessParameters.hStdError`), so every
+`std.debug.print` and any panic trace lands in the file. `daemon.zig` now
+registers a Ctrl+C handler only when `GetConsoleWindow()` reports a console;
+the window-subsystem daemon has none.
+
+`install-startup` now registers the sibling `camera-daemon.exe` with no
+arguments. `camera-probe daemon` remains the console form for debugging.
+
+Verified after reinstalling the task:
+
+- `schtasks /Query /V` showed
+  `Task To Run: "C:\Users\kp\camera_project-out\bin\camera-daemon.exe"`.
+- `schtasks /Run` started the daemon with `MainWindowHandle 0` and no
+  `conhost.exe` child process, proving no console exists.
+- `daemon.log` held the startup banner, all three worker lines, the ETW watcher
+  start, and `White balance applied: value=4 flags=0x2`.
+- A read-only `probe` reported white balance `4` flags `0x2` and power line `1`
+  (50 Hz).
+- `schtasks /End` stopped it; a second `/Run` truncated the log, recovered the
+  leftover ETW session, and logged the same startup. It was left running.
+
 ## References
 
 - Microsoft, Configure the Video Quality:

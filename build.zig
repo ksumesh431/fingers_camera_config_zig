@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
     const gui = addGui(b, target, optimize);
     b.installArtifact(gui);
 
+    const daemon_exe = addDaemon(b, target, optimize);
+    b.installArtifact(daemon_exe);
+
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     const run_step = b.step("run", "Run the read-only camera probe");
@@ -45,6 +48,29 @@ fn linkWindowsLibraries(module: *std.Build.Module) void {
     module.linkSystemLibrary("ole32", .{ .use_pkg_config = .no });
     module.linkSystemLibrary("oleaut32", .{ .use_pkg_config = .no });
     module.linkSystemLibrary("advapi32", .{ .use_pkg_config = .no });
+}
+
+/// The logon daemon. It is a window-subsystem binary so Task Scheduler starts
+/// it without ever creating a console window; it logs to
+/// `%LOCALAPPDATA%\CameraProject\daemon.log`.
+fn addDaemon(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const daemon_module = b.createModule(.{
+        .root_source_file = b.path("src/daemon_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    linkWindowsLibraries(daemon_module);
+
+    const daemon_exe = b.addExecutable(.{
+        .name = "camera-daemon",
+        .root_module = daemon_module,
+    });
+    daemon_exe.subsystem = .windows;
+    return daemon_exe;
 }
 
 /// The NanoUI settings window. It is a separate executable so the console

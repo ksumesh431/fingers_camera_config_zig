@@ -37,6 +37,7 @@ extern "kernel32" fn SetConsoleCtrlHandler(
     handler: ?*const fn (u32) callconv(.winapi) i32,
     add: i32,
 ) i32;
+extern "kernel32" fn GetConsoleWindow() ?*anyopaque;
 
 const WorkerContext = struct {
     shutdown_event: HANDLE,
@@ -57,10 +58,14 @@ pub fn run(io: std.Io, duration_seconds: u32) !void {
         _ = CloseHandle(stop_event);
     }
 
-    if (SetConsoleCtrlHandler(consoleControlHandler, 1) == 0) {
-        return error.ConsoleHandlerRegistrationFailed;
+    // Ctrl+C is only meaningful when a console exists. The window-subsystem
+    // logon daemon (`camera-daemon.exe`) has none and is stopped by the task.
+    if (GetConsoleWindow() != null) {
+        if (SetConsoleCtrlHandler(consoleControlHandler, 1) == 0) {
+            return error.ConsoleHandlerRegistrationFailed;
+        }
+        defer _ = SetConsoleCtrlHandler(consoleControlHandler, 0);
     }
-    defer _ = SetConsoleCtrlHandler(consoleControlHandler, 0);
 
     var white_balance_context: WorkerContext = .{ .shutdown_event = stop_event };
     var powerline_context: WorkerContext = .{ .shutdown_event = stop_event };

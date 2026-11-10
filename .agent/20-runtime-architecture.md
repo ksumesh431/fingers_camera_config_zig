@@ -16,6 +16,9 @@ camera-probe.exe daemon [seconds]
 - `camera-settings.exe` is a separate NanoUI window. It can run while the
   daemon runs, and it is a window-subsystem executable (`gui.subsystem =
   .windows`), so launching it opens no console.
+- `camera-daemon.exe` runs the same daemon as `camera-probe daemon` but is a
+  window-subsystem binary: the logon task uses it so no console appears. Its
+  output goes to `%LOCALAPPDATA%\CameraProject\daemon.log`.
 - `apply-config` applies the saved extra controls once without elevation;
   `config-path` prints where they are saved.
 - `preview [seconds]` streams frames through the same capture graph the window
@@ -83,9 +86,15 @@ camera-probe.exe daemon [seconds]
   - interactive token, so the elevated daemon runs in the user's session.
 - Registration must itself be elevated; `uninstall-startup` removes the task,
   `startup-status` reports whether it exists.
-- The action is always a quoted executable path plus `daemon`:
-  `"C:\Users\kp\camera_project-out\bin\camera-probe.exe" daemon`.
-- The task shows a console window at logon and writes no log file.
+- The action is the window-subsystem daemon next to the camera-probe binary
+  that registered it, quoted:
+  `"C:\Users\kp\camera_project-out\bin\camera-daemon.exe"`.
+- `camera-daemon.exe` creates no console window. It points its stderr at
+  `%LOCALAPPDATA%\CameraProject\daemon.log` (truncated at every start) before
+  running the daemon, so the log lines and any panic trace are kept. The
+  console `camera-probe daemon` command stays available for debugging.
+- The interactive token still applies: the daemon runs elevated in the user's
+  session, so it can reach the camera and the UVC ETW provider.
 - Started tasks are stopped with `schtasks /End /TN CameraProjectCameraDaemon`.
   The daemon must be stopped before rebuilding into its install directory,
   otherwise the install fails with `AccessDenied`.
@@ -155,8 +164,13 @@ white balance.
 ## Error handling and lifecycle
 
 - Each worker retries camera/COM/session failures after `5000 ms`.
-- Ctrl+C signals a shared Windows event; all three workers stop cleanly and the
-  ETW session is closed.
+- Ctrl+C is registered only when a console exists (`camera-probe daemon`). It
+  signals a shared Windows event; all three workers stop cleanly and the ETW
+  session is closed.
+- `camera-daemon.exe` has no console and no Ctrl+C path; the logon task is
+  stopped with `schtasks /End`, which terminates the process. A later start
+  recovers a leftover ETW session (`ERROR_ALREADY_EXISTS` → `StopTraceW` →
+  `StartTraceW`).
 - A finite `daemon <seconds>` test signals the same shutdown event automatically.
 - No ETL file or persistent analytic log is used by the ETW watcher.
 
@@ -177,6 +191,8 @@ white balance.
 - `src/etw.zig` — real-time `Microsoft-Windows-USBVideo` consumer, idle/cooldown
   state machine, finite and external-stop modes.
 - `src/daemon.zig` — elevated three-worker controller.
+- `src/daemon_main.zig` — `camera-daemon.exe` entry point: stderr to
+  `daemon.log`, then the same controller with no console.
 - `src/startup.zig` — Task Scheduler install/uninstall/status through `schtasks`.
 - `src/gui.zig` — NanoUI settings window (`camera-settings.exe`).
 - `src/winutil.zig` — shared elevation checks and messages.
@@ -208,6 +224,16 @@ The GUI can be rendered headlessly for layout checks:
 
 ```powershell
 & .\zig-out\bin\camera-settings.exe --nanoui-snapshot=C:\Users\kp\snapshot.png
+```
+
+Check the logon daemon exactly as Windows starts it, without a console:
+
+```powershell
+schtasks /Run /TN CameraProjectCameraDaemon
+Start-Sleep -Seconds 6
+Get-Process camera-daemon | Select-Object Id, MainWindowHandle   # 0: no window
+Get-Content "$env:LOCALAPPDATA\CameraProject\daemon.log"
+schtasks /End /TN CameraProjectCameraDaemon
 ```
 
 Build the elevated copy with:

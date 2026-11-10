@@ -38,7 +38,9 @@ not to WSL — see `.agent/00-environment.md` for the environment rules.
   probe; see `README.md` for explicit test commands.
 - Startup: `camera-probe install-startup` registers the Task Scheduler task
   `CameraProjectCameraDaemon` (`ONLOGON`, `HighestAvailable`, interactive), so
-  the daemon starts elevated at logon with no UAC prompt and a visible console.
+  the daemon starts elevated at logon with no UAC prompt and no console window.
+  The task runs `camera-daemon.exe`, a window-subsystem binary next to
+  `camera-probe.exe`; it logs to `%LOCALAPPDATA%\CameraProject\daemon.log`.
 - GUI: `camera-settings.exe` is a separate NanoUI window. It is built as a
   window-subsystem executable, so it opens no console window. It also shows a
   live camera preview with "Camera on" and "Restart camera" buttons; the
@@ -51,9 +53,10 @@ not to WSL — see `.agent/00-environment.md` for the environment rules.
   `%LOCALAPPDATA%\CameraProject\settings.zon` and the daemon re-applies them.
   White balance and power line are excluded from that table by a compile-time
   check in `src/controls.zig`; they stay exactly as described below.
-- Output location: `zig-out/bin/camera-probe.exe` for normal probes and
-  `zig-out/bin/camera-settings.exe` for the GUI;
-  `C:\Users\kp\camera_project-out\bin\camera-probe.exe` for the elevated copy
+- Output location: `zig-out/bin/camera-probe.exe` for normal probes,
+  `zig-out/bin/camera-settings.exe` for the GUI, and
+  `zig-out/bin/camera-daemon.exe` for the logon daemon;
+  `C:\Users\kp\camera_project-out\bin\` for the elevated copies
   the logon task runs. Elevated binaries use
   `--prefix C:\Users\kp\camera_project-out` so installing them never collides
   with a running daemon or the WSL-side install.

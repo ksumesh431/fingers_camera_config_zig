@@ -20,7 +20,7 @@ still edit the files through `/mnt/d/Cloud/cam_scripts`.
 Build and test from the project directory:
 
 ```powershell
-zig build          # .\zig-out\bin\camera-probe.exe, camera-settings.exe
+zig build          # camera-probe.exe, camera-daemon.exe, camera-settings.exe
 zig build test
 ```
 
@@ -154,8 +154,18 @@ schtasks /Run /TN CameraProjectCameraDaemon
 schtasks /End /TN CameraProjectCameraDaemon
 ```
 
-The task runs in the interactive session, so a console window is visible while
-the daemon runs. It writes no log file.
+The task runs in the interactive session and elevated, so the daemon can reach
+the camera and the UVC ETW provider. It starts `camera-daemon.exe`, a
+window-subsystem binary, so **no console window appears**. Its output is
+written to:
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\CameraProject\daemon.log"
+```
+
+The log is truncated at every daemon start and includes panic traces. The
+console command `camera-probe daemon` still exists for interactive debugging;
+it prints the same lines to its terminal.
 
 ## Settings window
 

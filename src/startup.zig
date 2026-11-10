@@ -15,14 +15,22 @@ pub fn install(io: std.Io, allocator: std.mem.Allocator) !void {
     }
 
     const exe = try std.process.executablePathAlloc(io, allocator);
+    defer allocator.free(exe);
+    // The logon task starts the window-subsystem daemon next to this binary,
+    // so logon shows no console window.
+    const folder = std.fs.path.dirname(exe) orelse ".";
+    const daemon_exe = try std.fs.path.join(allocator, &.{ folder, "camera-daemon.exe" });
+    defer allocator.free(daemon_exe);
     // A quoted path is always safe for Task Scheduler, with or without spaces.
-    const action = try allocator.print("\"{s}\" daemon", .{exe});
+    const action = try allocator.print("\"{s}\"", .{daemon_exe});
+    defer allocator.free(action);
 
     std.debug.print(
         "Registering the Windows logon task \"{s}\".\n" ++
             "  program: {s}\n" ++
             "  trigger: logon of the current user\n" ++
-            "  run level: highest available (elevated, no UAC prompt)\n",
+            "  run level: highest available (elevated, no UAC prompt)\n" ++
+            "  window: none (camera-daemon is a GUI-subsystem binary)\n",
         .{ task_name, action },
     );
 
