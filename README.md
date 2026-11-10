@@ -89,15 +89,50 @@ Run the integrated controller from an **elevated Windows PowerShell**:
 & $exe daemon 120
 ```
 
-The daemon runs two independent workers:
+The daemon runs three independent workers:
 
 - White balance: frozen manual value `4`, 250 ms reset polling.
 - Power line: ETW-triggered restart detection, then a combined forced refresh of
   white balance automatic → manual `4` and power line `60 Hz` → wait 2 seconds →
   `50 Hz`.
+- Extras: re-applies the user's saved custom controls (see below).
 
-Both workers retry camera/session failures after 5 seconds. Ctrl+C shuts them
+All workers retry camera/session failures after 5 seconds. Ctrl+C shuts them
 down cleanly. The daemon does not create an ETL file.
+
+## Custom controls and the settings file
+
+Every `IAMVideoProcAmp` / `IAMCameraControl` property the camera exposes besides
+the frozen white balance and power line can be managed:
+
+```powershell
+# Where the saved choices live.
+& $exe config-path
+
+# Apply the saved choices once, without the daemon and without elevation.
+& $exe apply-config
+```
+
+`camera-settings.exe` writes the file
+(`%LOCALAPPDATA%\CameraProject\settings.zon`) when you save preferences; the
+daemon's extras worker polls it every second and keeps the managed controls
+applied after stream restarts. Per control the file stores whether it is
+managed, whether automatic mode is forced, and the manual value. Unsupported or
+out-of-range entries are skipped, never treated as failures. The frozen white
+balance (`7`) and power line (`13`) cannot appear in the file.
+
+## Live preview check without the GUI
+
+The settings window's preview uses the same capture graph as this command:
+
+```powershell
+# Stream for 5 seconds and count the frames received; writes no setting.
+& $exe preview 5
+```
+
+The graph negotiates the largest driver format up to 1280 x 720 RGB32. Because
+the camera allows only one stream, a running OBS/Zoom/Windows Camera makes both
+the command and the in-window preview fail with `CameraBusy`.
 
 ## Start the daemon at logon
 
@@ -129,10 +164,19 @@ the daemon runs. It writes no log file.
 ```
 
 `camera-settings.exe` is a separate NanoUI `v0.13.0` executable built with
-`webview2 = "none"`. It shows the live white-balance and power-line state of the
-FINGERS camera, can reapply manual white balance `4` or force `50 Hz`, and shows
-whether the logon task is installed. NanoUI has no Windows system-tray support,
-so this is a normal window with no tray icon.
+`webview2 = "none"` as a window-subsystem binary, so launching it opens no
+console window. It shows:
+
+- a live camera preview with a `Camera on` stream toggle and a `Restart camera`
+  button. The camera allows one stream, so the toggle defaults to off to leave
+  the camera free for OBS, Zoom and Windows Camera;
+- the live white-balance and power-line state of the FINGERS camera, which stay
+  locked (starting a stream can revert white balance; the daemon reasserts it);
+- every other camera control with a switch, an Automatic/Manual choice where the
+  driver supports both, and a slider, saved to `settings.zon`.
+
+NanoUI has no Windows system-tray support, so this is a normal window with no
+tray icon.
 
 ## Elevated ETW diagnostic watcher
 

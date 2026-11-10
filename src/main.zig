@@ -1,8 +1,12 @@
 const std = @import("std");
+const controls = @import("controls.zig");
 const directshow = @import("directshow.zig");
+const extras = @import("extras.zig");
 const keepalive = @import("keepalive.zig");
 const etw = @import("etw.zig");
 const daemon = @import("daemon.zig");
+const preview = @import("preview.zig");
+const settings = @import("settings.zig");
 const startup = @import("startup.zig");
 
 const target_name = "FINGERS Hi-Res 2K";
@@ -32,11 +36,14 @@ const Action = union(enum) {
     set_exposure: directshow.LONG,
     set_exposure_auto,
     keepalive: u32,
+    preview: u32,
     etw_watch: EtwWatchOptions,
     daemon: u32,
     install_startup,
     uninstall_startup,
     startup_status,
+    apply_config,
+    config_path,
     watch: WatchOptions,
     help,
 };
@@ -54,10 +61,11 @@ pub fn main(init: std.process.Init) !void {
             printUsage();
             return;
         },
-        .daemon => |duration_seconds| return daemon.run(duration_seconds),
+        .daemon => |duration_seconds| return daemon.run(init.io, duration_seconds),
         .install_startup => return startup.install(init.io, allocator),
         .uninstall_startup => return startup.uninstall(init.io),
         .startup_status => return startup.showStatus(init.io),
+        .config_path => return showConfigPath(init.io, allocator),
         else => {},
     }
 
@@ -76,6 +84,7 @@ pub fn main(init: std.process.Init) !void {
         .set_exposure => |value| try setExposure(&camera, value),
         .set_exposure_auto => try setExposureAuto(&camera),
         .keepalive => |seconds| try keepalive.run(&camera, seconds),
+        .preview => |seconds| try runPreview(&camera, seconds),
         .etw_watch => |options| try etw.run(
             &camera,
             options.seconds,
@@ -84,6 +93,8 @@ pub fn main(init: std.process.Init) !void {
         ),
         .daemon => unreachable,
         .install_startup, .uninstall_startup, .startup_status => unreachable,
+        .apply_config => try applyConfig(init.io, allocator, &camera),
+        .config_path => unreachable,
         .watch => |options| try watch(&camera, options),
         .help => unreachable,
     }
@@ -177,7 +188,51 @@ fn probe(camera: *directshow.CameraDevice) !void {
         );
     }
 
+    printExtraControls(camera);
+
     std.debug.print("No camera settings were changed.\n", .{});
+}
+
+/// Lists every user-customisable control (never the two frozen settings).
+fn printExtraControls(camera: *directshow.CameraDevice) void {
+    std.debug.print("Extra controls (read-only):\n", .{});
+    for (controls.specs) |spec| {
+        const property_range = controls.range(camera, spec) catch |err| switch (err) {
+            error.PropertyNotSupported => {
+                std.debug.print("  {s} ({s}): not supported\n", .{ spec.label, spec.name });
+                continue;
+            },
+            else => {
+                std.debug.print(
+                    "  {s} ({s}): range failed: {s}\n",
+                    .{ spec.label, spec.name, @errorName(err) },
+                );
+                continue;
+            },
+        };
+        const current = controls.value(camera, spec) catch |err| {
+            std.debug.print(
+                "  {s} ({s}): value failed: {s}\n",
+                .{ spec.label, spec.name, @errorName(err) },
+            );
+            continue;
+        };
+        std.debug.print(
+            "  {s} ({s}): value={d} flags=0x{x} mode={s} range={d}..{d} step={d} default={d} caps=0x{x}\n",
+            .{
+                spec.label,
+                spec.name,
+                current.value,
+                @as(u32, @bitCast(current.flags)),
+                modeName(current.flags),
+                property_range.min,
+                property_range.max,
+                property_range.step,
+                property_range.default,
+                @as(u32, @bitCast(property_range.capabilities)),
+            },
+        );
+    }
 }
 
 fn printRange(camera: *directshow.CameraDevice) !directshow.PropertyRange {
@@ -335,6 +390,101 @@ fn setExposureAuto(camera: *directshow.CameraDevice) !void {
     }
 }
 
+fn showConfigPath(io: std.Io, allocator: std.mem.Allocator) !void {
+    const path = try settings.filePath(allocator);
+    defer allocator.free(path);
+
+    const bytes = try settings.readFile(io, allocator);
+    const state = if (bytes) |content| blk: {
+        allocator.free(content[0..content.len]);
+        break :blk "exists";
+    } else "not created yet";
+
+    std.debug.print(
+        "Settings file: {s}\n  {s}\n  It only holds the extra controls; the frozen white balance\n  and power-line settings are compile-time constants.\n",
+        .{ path, state },
+    );
+}
+
+/// Streams frames through the same graph the settings window uses and counts
+/// them per second. It never writes a camera property.
+fn runPreview(camera: *directshow.CameraDevice, seconds: u32) !void {
+    var active = preview.Preview.start(camera) catch |err| {
+        std.debug.print(
+            "Preview could not start: {s}. Another app may be streaming the camera.\n",
+            .{@errorName(err)},
+        );
+        return err;
+    };
+    defer active.stop();
+
+    const allocator = std.heap.page_allocator;
+    const pixels = try allocator.alloc(u8, active.bufferBytes());
+    defer allocator.free(pixels);
+
+    std.debug.print(
+        "Preview stream running for {d} second(s); no camera settings are changed.\n",
+        .{seconds},
+    );
+
+    var second: u32 = 0;
+    while (second < seconds) : (second += 1) {
+        var received: u32 = 0;
+        var elapsed_ms: u32 = 0;
+        var shape: ?preview.Frame = null;
+        while (elapsed_ms < 1000) : (elapsed_ms += 50) {
+            Sleep(50);
+            if (active.copyLatest(pixels)) |frame| {
+                received += 1;
+                shape = frame;
+            }
+        }
+        if (shape) |frame| {
+            std.debug.print(
+                "  {d}s: {d} frame(s), {d}x{d}\n",
+                .{ second + 1, received, frame.width, frame.height },
+            );
+        } else {
+            std.debug.print("  {d}s: no frames yet\n", .{second + 1});
+        }
+    }
+
+    std.debug.print("Preview stopped.\n", .{});
+}
+
+/// Applies the saved extra controls once, without the daemon and without
+/// elevation. The frozen settings are not touched.
+fn applyConfig(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    camera: *directshow.CameraDevice,
+) !void {
+    const path = try settings.filePath(allocator);
+    defer allocator.free(path);
+
+    var loaded = (try settings.load(io, allocator, allocator)) orelse {
+        std.debug.print(
+            "No settings file yet: {s}\nNothing to apply. Save preferences from camera-settings.exe first.\n",
+            .{path},
+        );
+        return;
+    };
+    defer loaded.deinit();
+
+    if (!loaded.settings.hasManagedControls()) {
+        std.debug.print("No managed extra controls in {s}.\n", .{path});
+        return;
+    }
+
+    std.debug.print("Applying extra controls from {s}\n", .{path});
+    const stats = controls.applySettings(camera, loaded.settings, true);
+    std.debug.print(
+        "Extra controls: {d} applied, {d} already correct, {d} skipped, {d} failed.\n",
+        .{ stats.applied, stats.unchanged, stats.skipped, stats.failed },
+    );
+    if (stats.failed > 0) return error.ExtraControlApplyFailed;
+}
+
 fn watch(camera: *directshow.CameraDevice, options: WatchOptions) !void {
     std.debug.print(
         "Starting finite watch: white_balance={d}, powerline={s}, duration={d}s, interval={d}ms.\n",
@@ -443,6 +593,14 @@ fn parseAction(args: []const [:0]const u8) !Action {
         if (seconds == 0 or seconds > 3600) return error.InvalidKeepAliveDuration;
         return .{ .keepalive = seconds };
     }
+    if (std.mem.eql(u8, command, "preview") and (args.len == 2 or args.len == 3)) {
+        const seconds: u32 = if (args.len == 2)
+            10
+        else
+            try std.fmt.parseInt(u32, args[2], 10);
+        if (seconds == 0 or seconds > 3600) return error.InvalidPreviewDuration;
+        return .{ .preview = seconds };
+    }
     if (std.mem.eql(u8, command, "daemon") and args.len <= 3) {
         const seconds: u32 = if (args.len == 2)
             0
@@ -453,6 +611,12 @@ fn parseAction(args: []const [:0]const u8) !Action {
     }
     if (std.mem.eql(u8, command, "startup-status") and args.len == 2) {
         return .startup_status;
+    }
+    if (std.mem.eql(u8, command, "apply-config") and args.len == 2) {
+        return .apply_config;
+    }
+    if (std.mem.eql(u8, command, "config-path") and args.len == 2) {
+        return .config_path;
     }
     if (std.mem.eql(u8, command, "install-startup") and args.len == 2) {
         return .install_startup;
@@ -502,11 +666,14 @@ fn printUsage() void {
         \\  camera-probe set-exposure <value> Set manual exposure (-13..0 here)
         \\  camera-probe set-exposure-auto    Restore automatic exposure
         \\  camera-probe keepalive <seconds>  Hold a null-rendered camera stream
+        \\  camera-probe preview [seconds]    Stream frames and count them; no writes
         \\  camera-probe etw-watch <sec> <hz> Elevated stream-activity refresh
         \\  camera-probe daemon [seconds]     Persistent elevated controller
         \\  camera-probe install-startup      Elevated; start daemon at logon
         \\  camera-probe uninstall-startup    Elevated; remove the logon task
         \\  camera-probe startup-status       Show the logon task state
+        \\  camera-probe apply-config         Apply the saved extra controls once
+        \\  camera-probe config-path          Show where the extra controls are saved
         \\  camera-probe watch <wb> <sec> [hz] Reapply for 1-3600 seconds
         \\  camera-probe help                 Show this help
         \\
@@ -540,9 +707,12 @@ fn modeName(flags: directshow.LONG) []const u8 {
 
 test {
     // Pull the other modules' tests into the test binary.
+    _ = controls;
     _ = directshow;
     _ = etw;
     _ = daemon;
+    _ = extras;
+    _ = settings;
     _ = startup;
 }
 
@@ -645,6 +815,18 @@ test "startup commands parse without a camera argument" {
     switch (try parseAction(&daemon_forever)) {
         .daemon => |seconds| try std.testing.expectEqual(@as(u32, 0), seconds),
         else => return error.ExpectedDaemonAction,
+    }
+
+    const apply_config_args = [_][:0]const u8{ "camera-probe", "apply-config" };
+    switch (try parseAction(&apply_config_args)) {
+        .apply_config => {},
+        else => return error.ExpectedApplyConfigAction,
+    }
+
+    const config_path_args = [_][:0]const u8{ "camera-probe", "config-path" };
+    switch (try parseAction(&config_path_args)) {
+        .config_path => {},
+        else => return error.ExpectedConfigPathAction,
     }
 }
 

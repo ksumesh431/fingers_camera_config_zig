@@ -68,8 +68,11 @@ fn addGui(
     gui_module.addImport("nanoui", nanoui.module("nanoui"));
     linkWindowsLibraries(gui_module);
 
-    return b.addExecutable(.{
+    const gui = b.addExecutable(.{
         .name = "camera-settings",
         .root_module = gui_module,
     });
+    // A window app, not a console app: launching it must not open a terminal.
+    gui.subsystem = .windows;
+    return gui;
 }

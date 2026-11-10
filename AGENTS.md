@@ -39,8 +39,18 @@ not to WSL — see `.agent/00-environment.md` for the environment rules.
 - Startup: `camera-probe install-startup` registers the Task Scheduler task
   `CameraProjectCameraDaemon` (`ONLOGON`, `HighestAvailable`, interactive), so
   the daemon starts elevated at logon with no UAC prompt and a visible console.
-- GUI: `camera-settings.exe` is a separate NanoUI window. NanoUI has no Windows
+- GUI: `camera-settings.exe` is a separate NanoUI window. It is built as a
+  window-subsystem executable, so it opens no console window. It also shows a
+  live camera preview with "Camera on" and "Restart camera" buttons; the
+  preview streams on the window's own camera handle, so the camera must not be
+  streaming in OBS/Zoom/Windows Camera at the same time. NanoUI has no Windows
   system-tray support, so there is no tray icon.
+- Custom controls: every extra `IAMVideoProcAmp` / `IAMCameraControl` property
+  the camera exposes is listed with a switch, an Automatic/Manual choice where
+  the driver supports both, and a slider. Choices are saved to
+  `%LOCALAPPDATA%\CameraProject\settings.zon` and the daemon re-applies them.
+  White balance and power line are excluded from that table by a compile-time
+  check in `src/controls.zig`; they stay exactly as described below.
 - Output location: `zig-out/bin/camera-probe.exe` for normal probes and
   `zig-out/bin/camera-settings.exe` for the GUI;
   `C:\Users\kp\camera_project-out\bin\camera-probe.exe` for the elevated copy
@@ -80,14 +90,16 @@ not to WSL — see `.agent/00-environment.md` for the environment rules.
 ## Daemon architecture
 
 - `camera-probe daemon [seconds]` is the persistent elevated controller.
-- Two worker threads, each with its own COM apartment and DirectShow camera:
+- Three worker threads, each with its own COM apartment and DirectShow camera:
   - Frozen white-balance loop: manual `4`, 250 ms poll.
   - ETW worker: 500 ms event-timestamp idle threshold, 5-second cooldown.
+  - Extras worker: user controls from the settings file, 1000 ms poll.
 - ETW stream restart performs a combined forced refresh: white balance automatic
   → power line `60 Hz` → wait 2 seconds → white balance manual `4` → power line
-  `50 Hz`; both final states are verified.
-- Errors retry after 5 seconds. Ctrl+C stops both workers and closes the ETW
-  session cleanly.
+  `50 Hz`; both final states are verified. The extras worker never touches those
+  two properties.
+- Errors retry after 5 seconds. Ctrl+C stops all three workers and closes the
+  ETW session cleanly.
 - Detailed runtime rules are in `.agent/20-runtime-architecture.md`.
 
 ## Project knowledge

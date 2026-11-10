@@ -111,9 +111,11 @@ experiment, not a requirement to assume.
   investigating power-line frequency. Keep its property, manual flags, reset
   detection, and read-back behavior unchanged; power-line work is separate.
 - Implemented: durable background operation (elevated daemon), Windows logon
-  startup (Task Scheduler), and the NanoUI settings window.
-- Still to implement: saved configuration file, robust camera identity for the
-  ETW trigger, and tray controls (NanoUI has no Windows tray support).
+  startup (Task Scheduler), the NanoUI settings window, a persisted settings
+  file for the extra (non-frozen) camera controls, and a live in-window camera
+  preview with restart and camera on/off controls.
+- Still to implement: robust camera identity for the ETW trigger, and tray
+  controls (NanoUI has no Windows tray support).
 
 ## Test log
 
@@ -358,6 +360,99 @@ started the elevated daemon without a UAC prompt (PID confirmed). A read-only
 probe executed while it ran reported manual white balance value `4` flags `0x2`
 and power line value `1` (50 Hz). `schtasks /End` stopped it cleanly and the
 probe then reported the same values. No camera setting was changed by this test.
+
+### 2026-11-10 — extra camera controls, settings file, and expanded GUI
+
+Extended the read-only `probe` to list every extra `IAMVideoProcAmp` /
+`IAMCameraControl` property with its range, step, current value, and flags.
+`GetRange`/`Get` returning `E_PROP_ID_UNSUPPORTED` (`0x80070490`) is now mapped
+to `error.PropertyNotSupported` instead of a generic COM failure.
+
+Observed on FINGERS Hi-Res 2K (read-only):
+
+- Supported, manual-only (`caps=0x2`): brightness `0..10` (current `5`),
+  contrast `0..20` (`10`), saturation `0..20` (`10`), sharpness `0..20` (`0`),
+  gamma `1..9` (`1`), backlight compensation `0..64` (`0`), gain `0..255` (`0`).
+- Supported with auto and manual (`caps=0x3`): exposure `-13..0` (current `-7`,
+  automatic), focus `0..1023` (current `0`, automatic).
+- Not supported (`E_PROP_ID_UNSUPPORTED`): hue, color enable, zoom, pan, tilt,
+  roll.
+- Iris reports `caps=0x1`, range `0..0`, step `0`: a placeholder. The GUI hides
+  any control whose range has no width.
+
+Added `%LOCALAPPDATA%\CameraProject\settings.zon` plus `apply-config` and
+`config-path`. The GUI (`camera-settings.exe`) now has one switch per control,
+an Automatic/Manual choice where both are supported, a slider snapped to the
+driver's step, and writes the file once the pointer is released. A compile-time
+check in `src/controls.zig` rejects any table containing white balance (`7`) or
+power line (`13`).
+
+Verification:
+
+- Headless snapshot rendered at 660x640 with a saved test file: frozen panel,
+  9 available controls, and managed rows (green switch, slider, value) all laid
+  out correctly.
+- `apply-config` with values matching the driver reported `0 applied, 3 already
+  correct`, proving the read/compare path.
+- Controlled write test: brightness `5 -> 6` was applied and read back as
+  `value=6 flags=0x2`; then `6 -> 5` was applied and read back as
+  `value=5 flags=0x2`. The frozen settings were untouched throughout
+  (`watch`/`probe` showed white balance value `4` and power line `1` as before).
+- The test settings file was deleted afterwards, so the daemon enforces nothing
+  extra until the user saves from the GUI.
+
+The daemon now has a third, independent extras worker; see
+`.agent/20-runtime-architecture.md`.
+
+### 2026-11-10 — live preview capture graph and settings-window integration
+
+Added `src/preview.zig`, a DirectShow capture graph (Filter Graph + Capture
+Graph Builder 2 + QEdit Sample Grabber) streaming from the same source filter
+the settings window holds for its property pages. It never writes a camera
+property. The first two attempts produced no frames and shaped the final
+design:
+
+- Callback mode (`SetCallback`) delivered no samples on this camera at all.
+  Buffered mode (`SetBufferSamples(1)`, `SetOneShot(0)`, poll
+  `GetCurrentBuffer`) works and needs no callback thread.
+- After that the graph still produced nothing. Instrumentation showed it had
+  negotiated the camera's native **2560 x 1440 RGB32** (stride 10240), not the
+  requested 640 x 360, so every read overran the 640x360 destination buffer and
+  was discarded silently. Fix: `IAMStreamConfig`
+  (`{C6E13340-30AC-11D0-A18C-00A0C9118956}`, found on the capture pin through
+  `ICaptureGraphBuilder2.FindInterface`) sets the largest driver format no
+  bigger than 1280 x 720 before `RenderStream`. The graph then negotiates
+  1280 x 720, stride 5120, bottom-up rows (`flip = true`).
+
+New console command `camera-probe preview [seconds]` (default 10) streams the
+same graph and counts frames per second without changing settings:
+
+- `preview 4` reported 15 frames in the first second, then 20 per second at a
+  50 ms poll interval, 1280 x 720, and a clean stop.
+- The first read after `Run` returns `VFW_E_WRONG_STATE` (0x80040227); that is
+  "no sample yet", not a failure.
+- A read-only `probe` afterwards reported the frozen state unchanged: white
+  balance value `4` flags `0x2`, power line value `1` (50 Hz).
+
+The settings window now embeds the preview (508-wide panel, 270-tall box) with
+a `Camera on` stream toggle and a `Restart camera` button:
+
+- `ui.texture` is only implemented by NanoUI's CPU canvas, so the GUI sets
+  `NANOUI_NO_D3D=1` before `App.create`; the Windows D3D11 presenter draws a
+  texture as a plain box.
+- Frames are flipped when the format is bottom-up and their alpha byte forced
+  to `255`, because NanoUI premultiplies textures by alpha.
+- End-to-end check: with `camera_on` temporarily defaulted to true, the real
+  window was launched and the screen captured after 7 seconds. It showed a
+  live image, the `live` badge, and `1280x720 at 30 fps - 121 frames received`.
+  The temporary default was reverted to off and the binary rebuilt.
+- Starting a stream can revert the driver to automatic white balance; the
+  window only reports the read-back and never writes a frozen setting from the
+  preview path.
+- The camera allows only one stream: with OBS or Zoom streaming, the preview
+  fails with `error.CameraBusy` and says so instead of retrying.
+- `camera-settings.exe` is now built with `gui.subsystem = .windows`; the PE
+  header reports subsystem 2, so launching it opens no console window.
 
 ## References
 

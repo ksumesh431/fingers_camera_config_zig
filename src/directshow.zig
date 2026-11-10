@@ -10,6 +10,8 @@ const ULONG = u32;
 
 const S_OK: HRESULT = 0;
 const S_FALSE: HRESULT = 1;
+/// `E_PROP_ID_UNSUPPORTED`: the driver does not offer this property.
+const E_PROP_ID_UNSUPPORTED: HRESULT = @bitCast(@as(u32, 0x80070490));
 const COINIT_APARTMENTTHREADED: DWORD = 0x2;
 const CLSCTX_INPROC_SERVER: DWORD = 0x1;
 const VT_BSTR: u16 = 8;
@@ -223,6 +225,7 @@ pub const CameraDevice = struct {
             &range.default,
             &range.capabilities,
         );
+        if (hr == E_PROP_ID_UNSUPPORTED) return error.PropertyNotSupported;
         if (failed(hr)) return comError("IAMVideoProcAmp.GetRange", hr);
         return range;
     }
@@ -236,6 +239,7 @@ pub const CameraDevice = struct {
             &value.value,
             &value.flags,
         );
+        if (hr == E_PROP_ID_UNSUPPORTED) return error.PropertyNotSupported;
         if (failed(hr)) return comError("IAMVideoProcAmp.Get", hr);
         return value;
     }
@@ -287,6 +291,7 @@ pub const CameraDevice = struct {
             &range.default,
             &range.capabilities,
         );
+        if (hr == E_PROP_ID_UNSUPPORTED) return error.PropertyNotSupported;
         if (failed(hr)) return comError("IAMCameraControl.GetRange", hr);
         return range;
     }
@@ -300,6 +305,7 @@ pub const CameraDevice = struct {
             &value.value,
             &value.flags,
         );
+        if (hr == E_PROP_ID_UNSUPPORTED) return error.PropertyNotSupported;
         if (failed(hr)) return comError("IAMCameraControl.Get", hr);
         return value;
     }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const directshow = @import("directshow.zig");
 const etw = @import("etw.zig");
+const extras = @import("extras.zig");
 const winutil = @import("winutil.zig");
 
 const target_name = "FINGERS Hi-Res 2K";
@@ -43,7 +44,7 @@ const WorkerContext = struct {
 
 var shutdown_event: ?HANDLE = null;
 
-pub fn run(duration_seconds: u32) !void {
+pub fn run(io: std.Io, duration_seconds: u32) !void {
     if (!winutil.isElevated()) {
         winutil.printRequiresElevation("daemon");
         return error.RequiresElevation;
@@ -63,6 +64,10 @@ pub fn run(duration_seconds: u32) !void {
 
     var white_balance_context: WorkerContext = .{ .shutdown_event = stop_event };
     var powerline_context: WorkerContext = .{ .shutdown_event = stop_event };
+    var extras_context: extras.Context = .{
+        .shutdown_event = stop_event,
+        .io = io,
+    };
 
     const white_balance_thread = CreateThread(
         null,
@@ -88,13 +93,33 @@ pub fn run(duration_seconds: u32) !void {
     };
     defer _ = CloseHandle(powerline_thread);
 
+    const extras_thread = CreateThread(
+        null,
+        0,
+        extras.workerMain,
+        &extras_context,
+        0,
+        null,
+    ) orelse {
+        _ = SetEvent(stop_event);
+        _ = WaitForSingleObject(white_balance_thread, infinite);
+        _ = WaitForSingleObject(powerline_thread, infinite);
+        return error.CreateExtrasThreadFailed;
+    };
+    defer _ = CloseHandle(extras_thread);
+
     std.debug.print(
         "Camera controller daemon started (elevated).\n",
         .{},
     );
     std.debug.print(
-        "  white balance: manual value {d}, poll {d} ms\n  power line: {s}, ETW-triggered refresh\n",
-        .{ white_balance_value, white_balance_poll_ms, powerlineName(powerline_target) },
+        "  white balance: manual value {d}, poll {d} ms\n  power line: {s}, ETW-triggered refresh\n  extras: user controls from %LOCALAPPDATA%\\CameraProject\\settings.zon, poll {d} ms\n",
+        .{
+            white_balance_value,
+            white_balance_poll_ms,
+            powerlineName(powerline_target),
+            extras.poll_ms,
+        },
     );
     std.debug.print("Press Ctrl+C to stop.\n", .{});
 
@@ -104,6 +129,7 @@ pub fn run(duration_seconds: u32) !void {
 
     _ = WaitForSingleObject(white_balance_thread, infinite);
     _ = WaitForSingleObject(powerline_thread, infinite);
+    _ = WaitForSingleObject(extras_thread, infinite);
     std.debug.print("Camera controller daemon stopped.\n", .{});
 }
 
